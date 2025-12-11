@@ -7,6 +7,9 @@
 #define MAX_POWERUPS 5
 #define MAX_ELITES 3
 #define MAX_BOSSES 1
+#define MAX_BOMBS 3
+#define BOMB_RADIUS 300.0f
+#define BOMB_DURATION 0.5f
 
 typedef enum {
 	MENU,
@@ -24,7 +27,8 @@ typedef enum {
 
 typedef enum {
 	SHOTGUN_POWERUP,
-	HEALTH_POWERUP
+	HEALTH_POWERUP,
+	BOMB_POWERUP
 } PowerUpType;
 
 typedef enum {
@@ -75,7 +79,17 @@ typedef struct {
 	float shotgunTimer;
 	int health;
 	int maxHealth;
+	int bombCount;
+	int maxBombs;
+	int bombDamage;
 } Player;
+
+typedef struct {
+	Vector2 position;
+	float radius;
+	float timer;
+	bool active;
+} BombEffect;
 
 typedef struct {
 	int timedModeHighScore;
@@ -87,6 +101,58 @@ typedef struct {
 	bool hobbyistAchieved;
 	int gamesPlayed;
 } Achievements;
+
+void DrawInstructionsScreen(int screenWidth, int screenHeight) {
+	ClearBackground(BLACK);
+	
+	// Title
+	DrawText("PLANE SHOOTER GAME - INSTRUCTIONS", 
+			 screenWidth/2 - MeasureText("PLANE SHOOTER GAME - INSTRUCTIONS", 40)/2, 
+			 50, 40, BLUE);
+	
+	// Controls Section
+	DrawText("GAME CONTROLS:", 50, 120, 30, WHITE);
+	DrawText("- ARROW KEYS: Move your plane", 70, 160, 25, WHITE);
+	DrawText("- SPACE: Fire bullets", 70, 190, 25, WHITE);
+	DrawText("- B: Drop bomb (damage all enemies in radius)", 70, 220, 25, WHITE);
+	DrawText("- P: Pause game", 70, 250, 25, WHITE);
+	DrawText("- R: Return to menu (in pause/game over)", 70, 280, 25, WHITE);
+	
+	// Game Modes
+	DrawText("GAME MODES:", 50, 330, 30, WHITE);
+	DrawText("- TIMED MODE: 60 seconds to get highest score", 70, 370, 25, WHITE);
+	DrawText("- INFINITE MODE: Survive as long as possible", 70, 400, 25, WHITE);
+	
+	// Enemies
+	DrawText("ENEMY TYPES:", 50, 450, 30, WHITE);
+	DrawText("- RED: Normal enemies (10 points)", 70, 490, 25, WHITE);
+	DrawText("- PURPLE: Elite enemies (25 points)", 70, 520, 25, WHITE);
+	DrawText("- ORANGE: Boss enemies (100+ points)", 70, 550, 25, WHITE);
+	
+	// Powerups
+	DrawText("POWERUPS:", screenWidth/2 + 50, 120, 30, WHITE);
+	DrawText("- GREEN (S): Shotgun power (triple shot)", screenWidth/2 + 70, 160, 25, WHITE);
+	DrawText("- BLUE (H): Health power (restore health)", screenWidth/2 + 70, 190, 25, WHITE);
+	DrawText("- RED (B): Bomb power (+1 bomb)", screenWidth/2 + 70, 220, 25, WHITE);
+	
+	// Bomb System
+	DrawText("BOMB SYSTEM:", screenWidth/2 + 50, 270, 30, WHITE);
+	DrawText("- Initial bomb capacity: 3", screenWidth/2 + 70, 310, 25, WHITE);
+	DrawText("- +1 bomb capacity every 5 levels", screenWidth/2 + 70, 340, 25, WHITE);
+	DrawText("- Base bomb damage: 5", screenWidth/2 + 70, 370, 25, WHITE);
+	DrawText("- +5 bomb damage every 5 levels", screenWidth/2 + 70, 400, 25, WHITE);
+	DrawText("- Bomb radius: 300 pixels", screenWidth/2 + 70, 430, 25, WHITE);
+	
+	// Achievements
+	DrawText("ACHIEVEMENTS:", screenWidth/2 + 50, 480, 30, WHITE);
+	DrawText("- ACE PILOT: Score 3000+ in Infinite Mode", screenWidth/2 + 70, 520, 25, WHITE);
+	DrawText("- FLIGHT ENTHUSIAST: Play 10+ games", screenWidth/2 + 70, 550, 25, WHITE);
+	
+	// Return prompt
+	DrawText("PRESS ENTER TO RETURN", 
+			 screenWidth/2 - MeasureText("PRESS ENTER TO RETURN", 25)/2, 
+			 screenHeight - 60, 25, WHITE);
+}
 
 int main(void) {
 	const int screenWidth = 1280;
@@ -106,12 +172,16 @@ int main(void) {
 		.hasShotgun = false,
 		.shotgunTimer = 0.0f,
 		.health = 3,
-		.maxHealth = 5
+		.maxHealth = 5,
+		.bombCount = 0,
+		.maxBombs = MAX_BOMBS,
+		.bombDamage = 5
 	};
 	
 	Bullet bullets[MAX_BULLETS] = {0};
 	Enemy enemies[MAX_ENEMIES] = {0};
 	PowerUp powerups[MAX_POWERUPS] = {0};
+	BombEffect bombEffect = {0};
 	
 	int score = 0;
 	int level = 1;
@@ -132,6 +202,12 @@ int main(void) {
 	Achievements achievements = {0};
 	
 	bool bossAlive = false;
+	const Rectangle bossArea = { 
+		screenWidth * 0.2f, 
+		screenHeight * 0.1f, 
+		screenWidth * 0.6f, 
+		screenHeight * 0.6f 
+	};
 	
 	while (!WindowShouldClose()) {
 		switch (gameState) {
@@ -153,7 +229,11 @@ int main(void) {
 				minuteTimer = 0.0f;
 				player.hasShotgun = false;
 				player.shotgunTimer = 0.0f;
+				player.bombCount = 0;
+				player.maxBombs = MAX_BOMBS;
+				player.bombDamage = 5;
 				bossAlive = false;
+				bombEffect.active = false;
 				
 				for (int i = 0; i < MAX_ENEMIES; i++) {
 					enemies[i].active = false;
@@ -207,6 +287,11 @@ int main(void) {
 					if (minuteTimer >= 60.0f) {
 						minuteTimer = 0.0f;
 						level++;
+						
+						if (level % 5 == 0) {
+							player.maxBombs++;
+							player.bombDamage += 5;
+						}
 					}
 				}
 				
@@ -219,6 +304,13 @@ int main(void) {
 				player.shotgunTimer -= GetFrameTime();
 				if (player.shotgunTimer <= 0) {
 					player.hasShotgun = false;
+				}
+			}
+			
+			if (bombEffect.active) {
+				bombEffect.timer -= GetFrameTime();
+				if (bombEffect.timer <= 0) {
+					bombEffect.active = false;
 				}
 			}
 			
@@ -264,6 +356,33 @@ int main(void) {
 							bullets[i].color = YELLOW;
 							bullets[i].isPlayerBullet = true;
 							break;
+						}
+					}
+				}
+			}
+			
+			if (IsKeyPressed(KEY_B) && player.bombCount > 0) {
+				player.bombCount--;
+				bombEffect.position = player.position;
+				bombEffect.radius = BOMB_RADIUS;
+				bombEffect.timer = BOMB_DURATION;
+				bombEffect.active = true;
+				
+				for (int i = 0; i < MAX_ENEMIES; i++) {
+					if (enemies[i].active) {
+						float dx = enemies[i].position.x - bombEffect.position.x;
+						float dy = enemies[i].position.y - bombEffect.position.y;
+						float distance = sqrt(dx*dx + dy*dy);
+						
+						if (distance < bombEffect.radius) {
+							enemies[i].health -= player.bombDamage;
+							if (enemies[i].health <= 0) {
+								enemies[i].active = false;
+								score += enemies[i].scoreValue;
+								if (enemies[i].type == BOSS_ENEMY) {
+									bossAlive = false;
+								}
+							}
 						}
 					}
 				}
@@ -338,8 +457,8 @@ int main(void) {
 					for (int i = 0; i < MAX_ENEMIES; i++) {
 						if (!enemies[i].active && enemies[i].type != ELITE_ENEMY) {
 							enemies[i].position = (Vector2){ 
-								screenWidth/2, 
-								-60 
+								bossArea.x + bossArea.width/2, 
+								bossArea.y - 60 
 							};
 							enemies[i].speed = (Vector2){ 
 								GetRandomValue(-3, 3), 
@@ -367,6 +486,7 @@ int main(void) {
 					
 					for (int i = 0; i < MAX_POWERUPS; i++) {
 						if (!powerups[i].active) {
+							PowerUpType type = (PowerUpType)GetRandomValue(0, 2);
 							powerups[i].position = (Vector2){ 
 								GetRandomValue(50, screenWidth - 50), 
 								-30 
@@ -374,9 +494,20 @@ int main(void) {
 							powerups[i].speed = (Vector2){ 0, 4 };
 							powerups[i].radius = 12;
 							powerups[i].active = true;
-							powerups[i].type = (GetRandomValue(0, 1) == 0) ? SHOTGUN_POWERUP : HEALTH_POWERUP;
+							powerups[i].type = type;
 							powerups[i].duration = 5.0f;
-							powerups[i].color = (powerups[i].type == SHOTGUN_POWERUP) ? GREEN : SKYBLUE;
+							
+							switch (type) {
+							case SHOTGUN_POWERUP:
+								powerups[i].color = GREEN;
+								break;
+							case HEALTH_POWERUP:
+								powerups[i].color = SKYBLUE;
+								break;
+							case BOMB_POWERUP:
+								powerups[i].color = RED;
+								break;
+							}
 							break;
 						}
 					}
@@ -399,8 +530,11 @@ int main(void) {
 					
 					if (enemies[i].type == BOSS_ENEMY) {
 						enemies[i].position.x += enemies[i].speed.x;
-						if (enemies[i].position.x < 60 || enemies[i].position.x > screenWidth - 60) {
+						if (enemies[i].position.x < bossArea.x || enemies[i].position.x > bossArea.x + bossArea.width) {
 							enemies[i].speed.x *= -1;
+						}
+						if (enemies[i].position.y < bossArea.y || enemies[i].position.y > bossArea.y + bossArea.height) {
+							enemies[i].speed.y *= -1;
 						}
 					}
 					
@@ -547,6 +681,10 @@ int main(void) {
 								player.maxHealth++;
 								player.health = player.maxHealth;
 							}
+						} else if (powerups[i].type == BOMB_POWERUP) {
+							if (player.bombCount < player.maxBombs) {
+								player.bombCount++;
+							}
 						}
 					}
 				}
@@ -620,10 +758,16 @@ int main(void) {
 					DrawCircleV(powerups[i].position, powerups[i].radius, powerups[i].color);
 					if (powerups[i].type == SHOTGUN_POWERUP) {
 						DrawText("S", powerups[i].position.x - 6, powerups[i].position.y - 10, 20, BLACK);
-					} else {
+					} else if (powerups[i].type == HEALTH_POWERUP) {
 						DrawText("H", powerups[i].position.x - 6, powerups[i].position.y - 10, 20, BLACK);
+					} else if (powerups[i].type == BOMB_POWERUP) {
+						DrawText("B", powerups[i].position.x - 6, powerups[i].position.y - 10, 20, BLACK);
 					}
 				}
+			}
+			
+			if (bombEffect.active) {
+				DrawCircleLines(bombEffect.position.x, bombEffect.position.y, bombEffect.radius, Fade(RED, 0.5f));
 			}
 			
 			DrawText(TextFormat("Score: %d", score), 50, 30, 24, WHITE);
@@ -632,6 +776,11 @@ int main(void) {
 				Color heartColor = (i < player.health) ? RED : GRAY;
 				DrawCircle(80 + i * 50, 60, 12, heartColor);
 			}
+			
+			DrawText(TextFormat("Bombs: %d/%d", player.bombCount, player.maxBombs), 
+					 screenWidth - 250, 150, 24, RED);
+			DrawText(TextFormat("Bomb Damage: %d", player.bombDamage), 
+					 screenWidth - 250, 180, 24, RED);
 			
 			if (gameMode == TIMED_MODE) {
 				DrawText(TextFormat("Time: %.1f", gameTime), screenWidth - 250, 30, 24, WHITE);
@@ -646,6 +795,7 @@ int main(void) {
 				
 				if (level % 5 == 0 && bossAlive) {
 					DrawText("BOSS FIGHT!", screenWidth/2 - MeasureText("BOSS FIGHT!", 36)/2, 50, 36, ORANGE);
+					DrawRectangleLinesEx(bossArea, 2.0f, Fade(ORANGE, 0.3f));
 				}
 			}
 		}
@@ -679,39 +829,15 @@ int main(void) {
 						 screenWidth/2 - MeasureText("ACHIEVEMENT: FLIGHT ENTHUSIAST", 30)/2, 
 						 550, 30, GOLD);
 			}
+			if (achievements.pilotAchieved) {
+				DrawText("ACHIEVEMENT: ACE PILOT", 
+						 screenWidth/2 - MeasureText("ACHIEVEMENT: ACE PILOT", 30)/2, 
+						 580, 30, GOLD);
+			}
 			break;
 			
 		case INSTRUCTIONS:
-			DrawText("HOW TO PLAY", 
-					 screenWidth/2 - MeasureText("HOW TO PLAY", 40)/2, 
-					 60, 40, BLUE);
-			
-			// 游戏玩法说明（调整字体大小）
-			DrawText("CONTROLS:", 80, 120, 28, WHITE);
-			DrawText("- ARROW KEYS: Move your plane", 100, 160, 22, WHITE);
-			DrawText("- SPACE: Fire bullets", 100, 190, 22, WHITE);
-			DrawText("- P: Pause game", 100, 220, 22, WHITE);
-			
-			DrawText("GAME MODES:", 80, 260, 28, WHITE);
-			DrawText("- TIMED MODE: 60 seconds to get highest score", 100, 300, 22, WHITE);
-			DrawText("- INFINITE MODE: Survive as long as possible", 100, 330, 22, WHITE);
-			
-			DrawText("ENEMIES:", 80, 370, 28, WHITE);
-			DrawText("- RED: Normal enemies (10 points)", 100, 410, 22, WHITE);
-			DrawText("- PURPLE: Elite enemies (25 points)", 100, 440, 22, WHITE);
-			DrawText("- ORANGE: Boss enemies (100+ points)", 100, 470, 22, WHITE);
-			
-			DrawText("POWERUPS:", 700, 120, 28, WHITE);
-			DrawText("- GREEN (S): Shotgun power (triple shot)", 720, 160, 22, WHITE);
-			DrawText("- BLUE (H): Health power (restore health)", 720, 190, 22, WHITE);
-			
-			DrawText("ACHIEVEMENTS:", 700, 230, 28, WHITE);
-			DrawText("- ACE PILOT: Score 3000+ in Infinite Mode", 720, 270, 22, WHITE);
-			DrawText("- FLIGHT ENTHUSIAST: Play 10+ games", 720, 300, 22, WHITE);
-			
-			DrawText("PRESS ENTER OR ESC TO RETURN", 
-					 screenWidth/2 - MeasureText("PRESS ENTER OR ESC TO RETURN", 22)/2, 
-					 screenHeight - 50, 22, WHITE);
+			DrawInstructionsScreen(screenWidth, screenHeight);
 			break;
 			
 		case PAUSED:
